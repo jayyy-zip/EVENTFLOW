@@ -1,0 +1,6 @@
+{
+  "name": "EventFlow AI",
+  "description": "Agentic, state-aware event planning operating system for weddings, birthdays, and community events powered by Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
