@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useEventContext } from '../context/EventContext';
 import { EventType } from '../types/event';
-import { X, Calendar, MapPin, Users, Wallet } from 'lucide-react';
+import { X } from 'lucide-react';
+import { sanitizeNumber, clamp } from '../utils/eventMath';
 
 interface NewEventModalProps {
   isOpen: boolean;
@@ -23,16 +24,20 @@ export const NewEventModal: React.FC<NewEventModalProps> = ({ isOpen, onClose })
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name) return;
+    if (!name.trim()) return;
+
+    const safeGuestCount = clamp(sanitizeNumber(guestCount, 200), 20, 2000);
+    const safeTotalBudget = Math.max(10000, sanitizeNumber(totalBudget, 1000000));
+    const safeDays = Math.max(0, sanitizeNumber(daysRemaining, 45));
 
     createNewEvent({
-      name,
+      name: name.trim(),
       type,
-      location,
+      location: location.trim() || 'Pune, Maharashtra',
       eventDate,
-      daysRemaining,
-      guestCount,
-      totalBudget,
+      daysRemaining: safeDays,
+      guestCount: safeGuestCount,
+      totalBudget: safeTotalBudget,
     });
 
     onClose();
@@ -45,7 +50,7 @@ export const NewEventModal: React.FC<NewEventModalProps> = ({ isOpen, onClose })
           <h3 className="font-display font-semibold text-[#1C1917] text-base">
             Create New Event Blueprint
           </h3>
-          <button onClick={onClose} className="text-[#78716C] hover:text-[#1C1917]">
+          <button onClick={onClose} className="text-[#78716C] hover:text-[#1C1917] cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -96,7 +101,7 @@ export const NewEventModal: React.FC<NewEventModalProps> = ({ isOpen, onClose })
                 type="date"
                 value={eventDate}
                 onChange={(e) => setEventDate(e.target.value)}
-                className="w-full px-3 py-2 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers"
+                className="w-full px-3 py-2 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers tabular-nums"
               />
             </div>
 
@@ -104,23 +109,24 @@ export const NewEventModal: React.FC<NewEventModalProps> = ({ isOpen, onClose })
               <label className="block text-[#58413D] font-medium mb-1">Days Countdown (T-Minus)</label>
               <input
                 type="number"
+                min="0"
                 value={daysRemaining}
-                onChange={(e) => setDaysRemaining(Number(e.target.value))}
-                className="w-full px-3 py-2 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers"
+                onChange={(e) => setDaysRemaining(Math.max(0, sanitizeNumber(e.target.value, 0)))}
+                className="w-full px-3 py-2 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers tabular-nums"
               />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[#58413D] font-medium mb-1">Expected Guests</label>
+              <label className="block text-[#58413D] font-medium mb-1">Expected Guests (20 - 2,000)</label>
               <input
                 type="number"
                 min="20"
-                max="1000"
+                max="2000"
                 value={guestCount}
-                onChange={(e) => setGuestCount(Number(e.target.value))}
-                className="w-full px-3 py-2 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers"
+                onChange={(e) => setGuestCount(clamp(sanitizeNumber(e.target.value, 200), 20, 2000))}
+                className="w-full px-3 py-2 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers tabular-nums"
               />
             </div>
 
@@ -128,10 +134,11 @@ export const NewEventModal: React.FC<NewEventModalProps> = ({ isOpen, onClose })
               <label className="block text-[#58413D] font-medium mb-1">Total Target Budget (₹)</label>
               <input
                 type="number"
+                min="10000"
                 step="50000"
                 value={totalBudget}
-                onChange={(e) => setTotalBudget(Number(e.target.value))}
-                className="w-full px-3 py-2 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers"
+                onChange={(e) => setTotalBudget(Math.max(10000, sanitizeNumber(e.target.value, 10000)))}
+                className="w-full px-3 py-2 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers tabular-nums"
               />
             </div>
           </div>
@@ -140,13 +147,13 @@ export const NewEventModal: React.FC<NewEventModalProps> = ({ isOpen, onClose })
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs text-[#78716C] hover:text-[#1C1917]"
+              className="px-4 py-2 text-xs text-[#78716C] hover:text-[#1C1917] cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] rounded-md shadow-xs transition-colors"
+              className="px-5 py-2 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] rounded-md shadow-xs transition-colors cursor-pointer"
             >
               Initialize Event
             </button>

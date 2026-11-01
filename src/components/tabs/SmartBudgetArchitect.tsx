@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useEventContext } from '../../context/EventContext';
 import { BudgetItem, CostType } from '../../types/event';
-import { formatINR } from '../../utils/formatters';
-import { AlertTriangle, Plus, Trash2, Edit3, Check, X, ShieldCheck } from 'lucide-react';
+import { formatINR, sanitizeNumber, getCostTypeBadgeClass } from '../../utils/eventMath';
+import { AlertTriangle, Plus, Trash2, Edit3, Check, X, ShieldCheck, Lock, Sparkles } from 'lucide-react';
 
 export const SmartBudgetArchitect: React.FC = () => {
   const {
@@ -11,6 +11,7 @@ export const SmartBudgetArchitect: React.FC = () => {
     updateBudgetItem,
     addBudgetItem,
     deleteBudgetItem,
+    lastMutatedIds,
   } = useEventContext();
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -37,32 +38,57 @@ export const SmartBudgetArchitect: React.FC = () => {
   };
 
   const saveEdit = (item: BudgetItem) => {
+    // Robust validation: prevent NaN, negative, or infinite values
+    const safeAmount = Math.max(0, sanitizeNumber(editAmount, 0));
+
+    let perGuestRate = item.perGuestRate || 0;
+    let baseFixedCost = item.baseFixedCost || 0;
+
+    if (item.costType === 'VARIABLE_PER_GUEST' && activeEvent.guestCount > 0) {
+      perGuestRate = Math.round(safeAmount / activeEvent.guestCount);
+      baseFixedCost = 0;
+    } else if (item.costType === 'HYBRID' && activeEvent.guestCount > 0) {
+      if (safeAmount >= baseFixedCost) {
+        perGuestRate = Math.round((safeAmount - baseFixedCost) / activeEvent.guestCount);
+      } else {
+        baseFixedCost = safeAmount;
+        perGuestRate = 0;
+      }
+    } else if (item.costType === 'FIXED') {
+      baseFixedCost = safeAmount;
+      perGuestRate = 0;
+    }
+
     updateBudgetItem({
       ...item,
-      allocatedAmount: editAmount,
-      baseFixedCost: item.costType === 'FIXED' || item.costType === 'HYBRID' ? editAmount : item.baseFixedCost,
+      allocatedAmount: safeAmount,
+      baseFixedCost,
+      perGuestRate,
     });
     setEditingId(null);
   };
 
   const handleCreateItem = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName) return;
+    if (!newName.trim()) return;
 
-    let initialAmount = newBaseCost;
+    const safeBaseCost = Math.max(0, sanitizeNumber(newBaseCost, 0));
+    const safeRate = Math.max(0, sanitizeNumber(newPerGuestRate, 0));
+
+    let initialAmount = safeBaseCost;
     if (newCostType === 'VARIABLE_PER_GUEST') {
-      initialAmount = newPerGuestRate * activeEvent.guestCount;
+      initialAmount = safeRate * activeEvent.guestCount;
     } else if (newCostType === 'HYBRID') {
-      initialAmount = newBaseCost + newPerGuestRate * activeEvent.guestCount;
+      initialAmount = safeBaseCost + safeRate * activeEvent.guestCount;
     }
 
     addBudgetItem({
       category: newCategory,
-      name: newName,
+      name: newName.trim(),
       subFunction: newSubFunction,
       costType: newCostType,
-      baseFixedCost: newBaseCost,
-      perGuestRate: newPerGuestRate,
+      baseFixedCost: safeBaseCost,
+      perGuestRate: safeRate,
       allocatedAmount: initialAmount,
       notes: `Added manually for ${newSubFunction}`,
     });
@@ -88,7 +114,7 @@ export const SmartBudgetArchitect: React.FC = () => {
 
         <button
           onClick={() => setShowAddModal(true)}
-          className="px-3 py-1.5 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] rounded-md transition-colors flex items-center gap-1.5 shrink-0 shadow-2xs"
+          className="px-3 py-1.5 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] rounded-md transition-colors flex items-center gap-1.5 shrink-0 shadow-2xs cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>Add Line Item</span>
@@ -114,16 +140,32 @@ export const SmartBudgetArchitect: React.FC = () => {
             <tbody className="divide-y divide-[#F5F2EC] text-xs">
               {filteredItems.map((item) => {
                 const isEditing = editingId === item.id;
-                const pctOfBudget = ((item.allocatedAmount / activeEvent.totalBudget) * 100).toFixed(1);
+                const pctOfBudget = activeEvent.totalBudget > 0
+                  ? ((item.allocatedAmount / activeEvent.totalBudget) * 100).toFixed(1)
+                  : '0.0';
 
                 return (
                   <tr
                     key={item.id}
-                    className="hover:bg-[#FAF8F5] transition-colors group"
+                    className={`hover:bg-[#FAF8F5] transition-colors group ${
+                      lastMutatedIds.has(item.id) ? 'animate-pulse bg-indigo-50' : ''
+                    }`}
                   >
                     {/* Line Item & Category */}
                     <td className="py-3 px-4">
-                      <div className="font-medium text-[#1C1917]">{item.name}</div>
+                      <div className="font-medium text-[#1C1917] flex items-center gap-1.5">
+                        <span>{item.name}</span>
+                        {item.fromMoodboard && (
+                          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-sm bg-purple-50 text-purple-700 border border-purple-200 shrink-0">
+                            From Moodboard
+                          </span>
+                        )}
+                        {item.lockedVendorName && (
+                          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-sm bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0 flex items-center gap-1">
+                            🔒 {item.lockedVendorName}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-[11px] text-[#78716C] flex items-center gap-1">
                         <span>{item.category}</span>
                         {item.notes && (
@@ -139,7 +181,7 @@ export const SmartBudgetArchitect: React.FC = () => {
 
                     {/* Sub-Function Tag */}
                     <td className="py-3 px-3">
-                      <span className="text-[11px] font-medium text-[#58413D] bg-[#F5F2EC] px-2 py-0.5 rounded-sm">
+                      <span className="text-[11px] font-medium text-[#58413D] bg-[#F5F2EC] px-2 py-0.5 rounded-sm whitespace-nowrap">
                         {item.subFunction}
                       </span>
                     </td>
@@ -147,22 +189,16 @@ export const SmartBudgetArchitect: React.FC = () => {
                     {/* Cost Behavior */}
                     <td className="py-3 px-3">
                       <span
-                        className={`text-[11px] font-medium px-1.5 py-0.5 rounded-sm ${
-                          item.costType === 'FIXED'
-                            ? 'text-slate-700 bg-slate-100'
-                            : item.costType === 'VARIABLE_PER_GUEST'
-                            ? 'text-emerald-700 bg-emerald-50'
-                            : item.costType === 'HYBRID'
-                            ? 'text-indigo-700 bg-indigo-50'
-                            : 'text-amber-800 bg-amber-50'
-                        }`}
+                        className={`text-[11px] font-medium px-1.5 py-0.5 rounded-sm whitespace-nowrap ${getCostTypeBadgeClass(
+                          item.costType
+                        )}`}
                       >
                         {item.costType.replace(/_/g, ' ')}
                       </span>
                     </td>
 
                     {/* Unit / Head Rate */}
-                    <td className="py-3 px-3 text-right font-mono-numbers text-[#58413D]">
+                    <td className="py-3 px-3 text-right font-mono-numbers tabular-nums text-[#58413D] whitespace-nowrap">
                       {item.costType === 'VARIABLE_PER_GUEST' || item.costType === 'HYBRID' ? (
                         <span>₹{item.perGuestRate.toLocaleString('en-IN')}/head</span>
                       ) : (
@@ -171,25 +207,28 @@ export const SmartBudgetArchitect: React.FC = () => {
                     </td>
 
                     {/* Allocated Amount */}
-                    <td className="py-3 px-4 text-right font-mono-numbers font-semibold text-[#1C1917]">
+                    <td className="py-3 px-4 text-right font-mono-numbers tabular-nums font-semibold text-[#1C1917] whitespace-nowrap">
                       {isEditing ? (
                         <div className="flex items-center justify-end gap-1">
                           <input
                             type="number"
+                            min="0"
                             value={editAmount}
-                            onChange={(e) => setEditAmount(Number(e.target.value))}
-                            className="w-24 px-1.5 py-0.5 text-xs text-right border border-[#4F46E5] rounded bg-white"
+                            onChange={(e) => setEditAmount(Math.max(0, sanitizeNumber(e.target.value, 0)))}
+                            className="w-24 px-1.5 py-0.5 text-xs text-right border border-[#4F46E5] rounded bg-white font-mono-numbers tabular-nums outline-none"
                             autoFocus
                           />
                           <button
                             onClick={() => saveEdit(item)}
-                            className="p-1 text-[#16A34A] hover:bg-emerald-50 rounded"
+                            className="p-1 text-[#16A34A] hover:bg-emerald-50 rounded cursor-pointer"
+                            title="Save changes"
                           >
                             <Check className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={() => setEditingId(null)}
-                            className="p-1 text-[#78716C] hover:bg-stone-100 rounded"
+                            className="p-1 text-[#78716C] hover:bg-stone-100 rounded cursor-pointer"
+                            title="Cancel"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
@@ -197,7 +236,7 @@ export const SmartBudgetArchitect: React.FC = () => {
                       ) : (
                         <button
                           onClick={() => startEdit(item)}
-                          className="hover:underline hover:text-[#4F46E5] cursor-pointer inline-flex items-center gap-1"
+                          className="hover:underline hover:text-[#4F46E5] cursor-pointer inline-flex items-center gap-1 font-mono-numbers tabular-nums"
                           title="Click to inline edit amount"
                         >
                           <span>{formatINR(item.allocatedAmount)}</span>
@@ -207,7 +246,7 @@ export const SmartBudgetArchitect: React.FC = () => {
                     </td>
 
                     {/* % of Budget */}
-                    <td className="py-3 px-3 text-right font-mono-numbers text-[#78716C]">
+                    <td className="py-3 px-3 text-right font-mono-numbers tabular-nums text-[#78716C] whitespace-nowrap">
                       {pctOfBudget}%
                     </td>
 
@@ -233,7 +272,7 @@ export const SmartBudgetArchitect: React.FC = () => {
                       {item.costType !== 'TAX_AND_BUFFER' && (
                         <button
                           onClick={() => deleteBudgetItem(item.id)}
-                          className="p-1 text-[#A8A29E] hover:text-[#DC2626] transition-colors rounded"
+                          className="p-1 text-[#A8A29E] hover:text-[#DC2626] transition-colors rounded cursor-pointer"
                           title="Delete line item"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -250,9 +289,11 @@ export const SmartBudgetArchitect: React.FC = () => {
         {/* Footer Subtotal Strip */}
         <div className="bg-[#FAF8F5] px-4 py-2.5 border-t border-[#E7E5E4] flex items-center justify-between text-xs font-semibold text-[#1C1917]">
           <span>
-            Subtotal ({filteredItems.length} categories active)
+            {activeSubFunction === 'All Functions'
+              ? `Subtotal (${filteredItems.length} line items active)`
+              : `Filtered Subtotal: ${activeSubFunction} (${filteredItems.length} items)`}
           </span>
-          <span className="font-mono-numbers text-sm text-[#1C1917]">
+          <span className="font-mono-numbers tabular-nums text-sm text-[#1C1917]">
             {formatINR(subtotal)}
           </span>
         </div>
@@ -268,7 +309,7 @@ export const SmartBudgetArchitect: React.FC = () => {
               </h3>
               <button
                 onClick={() => setShowAddModal(false)}
-                className="text-[#78716C] hover:text-[#1C1917]"
+                className="text-[#78716C] hover:text-[#1C1917] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -338,9 +379,10 @@ export const SmartBudgetArchitect: React.FC = () => {
                   <label className="block text-[#58413D] font-medium mb-1">Allocated Amount (₹)</label>
                   <input
                     type="number"
+                    min="0"
                     value={newBaseCost}
-                    onChange={(e) => setNewBaseCost(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers"
+                    onChange={(e) => setNewBaseCost(Math.max(0, sanitizeNumber(e.target.value, 0)))}
+                    className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers tabular-nums"
                   />
                 </div>
               )}
@@ -350,12 +392,13 @@ export const SmartBudgetArchitect: React.FC = () => {
                   <label className="block text-[#58413D] font-medium mb-1">Rate Per Head (₹)</label>
                   <input
                     type="number"
+                    min="0"
                     value={newPerGuestRate}
-                    onChange={(e) => setNewPerGuestRate(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers"
+                    onChange={(e) => setNewPerGuestRate(Math.max(0, sanitizeNumber(e.target.value, 0)))}
+                    className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers tabular-nums"
                   />
-                  <span className="text-[11px] text-[#78716C] mt-1 block">
-                    Total for {activeEvent.guestCount} guests: ₹{(newPerGuestRate * activeEvent.guestCount).toLocaleString('en-IN')}
+                  <span className="text-[11px] text-[#78716C] mt-1 block font-mono-numbers tabular-nums">
+                    Total for {activeEvent.guestCount.toLocaleString('en-IN')} guests: {formatINR(newPerGuestRate * activeEvent.guestCount)}
                   </span>
                 </div>
               )}
@@ -366,18 +409,20 @@ export const SmartBudgetArchitect: React.FC = () => {
                     <label className="block text-[#58413D] font-medium mb-1">Base Fixed (₹)</label>
                     <input
                       type="number"
+                      min="0"
                       value={newBaseCost}
-                      onChange={(e) => setNewBaseCost(Number(e.target.value))}
-                      className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers"
+                      onChange={(e) => setNewBaseCost(Math.max(0, sanitizeNumber(e.target.value, 0)))}
+                      className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers tabular-nums"
                     />
                   </div>
                   <div>
                     <label className="block text-[#58413D] font-medium mb-1">Per Guest Rate (₹)</label>
                     <input
                       type="number"
+                      min="0"
                       value={newPerGuestRate}
-                      onChange={(e) => setNewPerGuestRate(Number(e.target.value))}
-                      className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers"
+                      onChange={(e) => setNewPerGuestRate(Math.max(0, sanitizeNumber(e.target.value, 0)))}
+                      className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers tabular-nums"
                     />
                   </div>
                 </div>
@@ -387,13 +432,13 @@ export const SmartBudgetArchitect: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="px-3 py-1.5 text-xs text-[#78716C] hover:text-[#1C1917]"
+                  className="px-3 py-1.5 text-xs text-[#78716C] hover:text-[#1C1917] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] rounded-md"
+                  className="px-4 py-1.5 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] rounded-md cursor-pointer"
                 >
                   Save Line Item
                 </button>

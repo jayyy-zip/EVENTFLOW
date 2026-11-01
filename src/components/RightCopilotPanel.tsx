@@ -1,17 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useEventContext } from '../context/EventContext';
-import { formatINR } from '../utils/formatters';
+import { formatINR } from '../utils/eventMath';
 import {
   Sparkles,
   Send,
   Check,
   RotateCcw,
-  TrendingDown,
-  TrendingUp,
   Clock,
-  PlusCircle,
-  HelpCircle,
   Bot,
+  AlertCircle,
 } from 'lucide-react';
 
 export const RightCopilotPanel: React.FC = () => {
@@ -25,6 +22,15 @@ export const RightCopilotPanel: React.FC = () => {
   } = useEventContext();
 
   const [promptText, setPromptText] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      inputRef.current?.focus();
+    };
+    window.addEventListener('eventflow:focus-copilot', handleFocus);
+    return () => window.removeEventListener('eventflow:focus-copilot', handleFocus);
+  }, []);
 
   const testPrompts = [
     {
@@ -50,7 +56,7 @@ export const RightCopilotPanel: React.FC = () => {
 
   return (
     <aside className="w-96 bg-white border-l border-[#E7E5E4] flex flex-col justify-between shrink-0 h-full overflow-hidden">
-      {/* Copilot Header */}
+      {/* Pinned Copilot Header (Never scrolls off-screen) */}
       <div className="p-4 border-b border-[#E7E5E4] bg-[#FAF8F5] space-y-2 shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -66,17 +72,17 @@ export const RightCopilotPanel: React.FC = () => {
           </span>
         </div>
 
-        {/* Live Context Pill */}
+        {/* Live Context Pill - strictly scoped to active event */}
         <div className="text-[11px] text-[#58413D] flex items-center gap-1.5 font-medium truncate">
-          <span>{activeEvent.name}</span>
+          <span className="font-semibold text-[#1C1917] truncate">{activeEvent.name}</span>
           <span>·</span>
-          <span>{activeEvent.guestCount} guests</span>
+          <span className="font-mono-numbers tabular-nums shrink-0">{activeEvent.guestCount.toLocaleString('en-IN')} guests</span>
           <span>·</span>
-          <span>{formatINR(activeEvent.totalBudget, true)}</span>
+          <span className="font-mono-numbers tabular-nums shrink-0">{formatINR(activeEvent.totalBudget, true)}</span>
         </div>
       </div>
 
-      {/* Chat & Mutation Cards Stream */}
+      {/* Independently Scrollable Chat & Mutation Stream */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* Intro Message */}
         <div className="bg-[#FAF8F5] border border-[#E7E5E4] rounded-lg p-3 text-xs space-y-1.5 text-[#58413D]">
@@ -86,7 +92,7 @@ export const RightCopilotPanel: React.FC = () => {
           </div>
           <p className="leading-relaxed">
             I don&apos;t just chat—I directly compile your natural-language directions into state mutations
-            across your Budget, DAG Timeline, and Checklists.
+            across your Budget, DAG Timeline, and Checklists strictly scoped to <strong>{activeEvent.name}</strong>.
           </p>
         </div>
 
@@ -120,11 +126,17 @@ export const RightCopilotPanel: React.FC = () => {
         {isThinking && (
           <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-lg flex items-center gap-2 text-xs text-[#4F46E5] animate-pulse">
             <Sparkles className="w-4 h-4 text-[#4F46E5]" />
-            <span>Reasoning over current event state & computing diffs...</span>
+            <span>Reasoning over {activeEvent.name} state & computing diffs...</span>
           </div>
         )}
 
-        {/* Proposed Plan Mutation Cards */}
+        {/* Proposed Plan Mutation Cards (Strictly scoped by active event ID) */}
+        {proposedMutations.length === 0 && !isThinking && (
+          <div className="text-center py-6 text-stone-400 text-xs">
+            No pending mutations for this event. Enter an instruction or run a test scenario above.
+          </div>
+        )}
+
         {proposedMutations.map((mutation) => (
           <div
             key={mutation.id}
@@ -144,11 +156,11 @@ export const RightCopilotPanel: React.FC = () => {
               {mutation.assistantReply}
             </div>
 
-            {/* Proposed Plan Mutation Card Header */}
+            {/* Mutation Card Header */}
             <div className="pt-1 text-[11px] font-semibold text-[#4F46E5] uppercase tracking-wider flex items-center justify-between">
-              <span>Proposed Plan Mutation Card</span>
+              <span>Proposed Plan Mutation</span>
               {mutation.readinessScoreDelta !== 0 && (
-                <span className="text-[10px] text-[#16A34A] font-mono-numbers">
+                <span className="text-[10px] text-[#16A34A] font-mono-numbers tabular-nums font-semibold">
                   {mutation.readinessScoreDelta > 0
                     ? `+${mutation.readinessScoreDelta}% Readiness`
                     : `${mutation.readinessScoreDelta}% Readiness`}
@@ -164,7 +176,7 @@ export const RightCopilotPanel: React.FC = () => {
                 return (
                   <div
                     key={i}
-                    className="p-1.5 rounded bg-[#FAF8F5] border border-[#E7E5E4] flex items-center justify-between font-mono-numbers text-[11px]"
+                    className="p-1.5 rounded bg-[#FAF8F5] border border-[#E7E5E4] flex items-center justify-between font-mono-numbers tabular-nums text-[11px]"
                   >
                     <div className="truncate max-w-[170px]">
                       <span className="font-semibold text-[#1C1917]">{bd.category}: </span>
@@ -180,10 +192,10 @@ export const RightCopilotPanel: React.FC = () => {
                       </span>
                       <span
                         className={`text-[10px] font-bold ${
-                          delta > 0 ? 'text-[#16A34A]' : 'text-rose-600'
+                          delta > 0 ? 'text-[#16A34A]' : delta < 0 ? 'text-rose-600' : 'text-[#78716C]'
                         }`}
                       >
-                        ({delta > 0 ? `+${formatINR(delta, true)}` : `-${formatINR(Math.abs(delta), true)}`})
+                        ({delta > 0 ? `+${formatINR(delta, true)}` : delta < 0 ? `-${formatINR(Math.abs(delta), true)}` : '₹0'})
                       </span>
                     </div>
                   </div>
@@ -198,7 +210,7 @@ export const RightCopilotPanel: React.FC = () => {
                 >
                   <div className="font-semibold truncate">{td.title}</div>
                   <div className="text-[10px] text-amber-800 flex items-center gap-1">
-                    <Clock className="w-3 h-3 text-amber-600" />
+                    <Clock className="w-3 h-3 text-amber-600 shrink-0" />
                     <span>Status: {td.newStatus} · {td.reason}</span>
                   </div>
                 </div>
@@ -211,7 +223,7 @@ export const RightCopilotPanel: React.FC = () => {
                   className="p-1.5 rounded bg-emerald-50/50 border border-emerald-200 text-[11px] text-emerald-900 flex items-center justify-between"
                 >
                   <span className="truncate">+ {ca.itemName}</span>
-                  <span className="font-mono-numbers font-semibold shrink-0">
+                  <span className="font-mono-numbers tabular-nums font-semibold shrink-0">
                     {formatINR(ca.estimatedCost, true)}
                   </span>
                 </div>
@@ -223,11 +235,11 @@ export const RightCopilotPanel: React.FC = () => {
               {mutation.applied ? (
                 <div className="flex items-center justify-between w-full">
                   <span className="text-[11px] font-semibold text-[#16A34A] flex items-center gap-1">
-                    <Check className="w-3.5 h-3.5" /> Applied to Active State
+                    <Check className="w-3.5 h-3.5" /> Applied to {activeEvent.name}
                   </span>
                   <button
                     onClick={() => revertMutation(mutation.id)}
-                    className="text-[11px] font-medium text-[#78716C] hover:text-[#DC2626] flex items-center gap-1 py-1 px-2 rounded hover:bg-stone-100"
+                    className="text-[11px] font-medium text-[#78716C] hover:text-[#DC2626] flex items-center gap-1 py-1 px-2 rounded hover:bg-stone-100 transition-colors"
                   >
                     <RotateCcw className="w-3 h-3" />
                     <span>Revert</span>
@@ -236,7 +248,7 @@ export const RightCopilotPanel: React.FC = () => {
               ) : (
                 <button
                   onClick={() => applyMutation(mutation.id)}
-                  className="w-full py-2 text-xs font-semibold text-white bg-[#4F46E5] hover:bg-[#4338CA] active:bg-[#3730A3] rounded-md transition-colors flex items-center justify-center gap-1.5 shadow-xs"
+                  className="w-full py-2 text-xs font-semibold text-white bg-[#4F46E5] hover:bg-[#4338CA] active:bg-[#3730A3] rounded-md transition-colors flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
                 >
                   <Check className="w-3.5 h-3.5" />
                   <span>Apply Changes to Plan</span>
@@ -247,27 +259,28 @@ export const RightCopilotPanel: React.FC = () => {
         ))}
       </div>
 
-      {/* Input Box */}
+      {/* Pinned Input Box (Never scrolls off-screen) */}
       <form onSubmit={handleSubmit} className="p-3 border-t border-[#E7E5E4] bg-white space-y-2 shrink-0">
         <div className="relative">
           <input
+            ref={inputRef}
             type="text"
             value={promptText}
             onChange={(e) => setPromptText(e.target.value)}
-            placeholder="Instruct Copilot (e.g. 'Cut decor by 20% and shift Sangeet')..."
+            placeholder={`Instruct Copilot for ${activeEvent.name}...`}
             disabled={isThinking}
             className="w-full pl-3 pr-10 py-2 bg-[#FAF8F5] border border-[#E7E5E4] rounded-lg text-xs placeholder:text-[#A8A29E] outline-none focus:border-[#4F46E5] focus:bg-white transition-colors"
           />
           <button
             type="submit"
             disabled={!promptText.trim() || isThinking}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-white bg-[#4F46E5] hover:bg-[#4338CA] disabled:opacity-40 rounded-md transition-colors"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-white bg-[#4F46E5] hover:bg-[#4338CA] disabled:opacity-40 rounded-md transition-colors cursor-pointer"
           >
             <Send className="w-3 h-3" />
           </button>
         </div>
         <div className="text-[10px] text-[#A8A29E] text-center">
-          Commands emit structured diffs for your review before applying.
+          Commands emit structured diffs scoped to {activeEvent.name} before applying.
         </div>
       </form>
     </aside>

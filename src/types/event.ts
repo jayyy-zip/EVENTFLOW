@@ -15,6 +15,12 @@ export interface BudgetItem {
   allocatedAmount: number;
   aiWarning?: string;
   notes?: string;
+  /** Set when this row was synced in from Tab 4 Moodboard BOM */
+  fromMoodboard?: boolean;
+  /** Vendor ID locked via Tab 3 "Lock & Award" action */
+  lockedVendorId?: string;
+  /** Human-readable vendor name for locked rows */
+  lockedVendorName?: string;
 }
 
 export interface TimelineTask {
@@ -105,6 +111,7 @@ export interface ChecklistAddition {
 
 export interface PlanMutationPayload {
   id: string;
+  eventId?: string;
   timestamp: number;
   userPrompt: string;
   assistantReply: string;

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useEventContext } from '../context/EventContext';
-import { Sparkles, Plus, Calendar, MapPin, Users, RotateCcw } from 'lucide-react';
-import { formatINR } from '../utils/formatters';
+import { Plus, RotateCcw } from 'lucide-react';
+import { formatINR } from '../utils/eventMath';
 
 interface TopHeaderProps {
   onOpenNewEventModal: () => void;
@@ -38,7 +38,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenNewEventModal }) => 
         <div className="relative">
           <button
             onClick={() => setShowEventDropdown(!showEventDropdown)}
-            className="flex items-center gap-2 px-2.5 py-1.5 text-xs font-semibold text-[#1C1917] bg-[#FAF8F5] border border-[#E7E5E4] rounded-md hover:border-[#D6D3D1] transition-colors whitespace-nowrap"
+            className="flex items-center gap-2 px-2.5 py-1.5 text-xs font-semibold text-[#1C1917] bg-[#FAF8F5] border border-[#E7E5E4] rounded-md hover:border-[#D6D3D1] transition-colors whitespace-nowrap cursor-pointer"
           >
             <span className="w-2 h-2 rounded-full bg-[#E05A47]" />
             <span className="max-w-[220px] truncate">{activeEvent.name}</span>
@@ -57,7 +57,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenNewEventModal }) => 
                     switchEvent(evt.id);
                     setShowEventDropdown(false);
                   }}
-                  className={`w-full text-left px-2.5 py-2 rounded-md text-xs flex flex-col gap-0.5 transition-colors ${
+                  className={`w-full text-left px-2.5 py-2 rounded-md text-xs flex flex-col gap-0.5 transition-colors cursor-pointer ${
                     evt.id === activeEvent.id
                       ? 'bg-[#FAF8F5] text-[#1C1917] font-medium border border-[#E7E5E4]'
                       : 'text-[#58413D] hover:bg-[#FAF8F5]'
@@ -65,16 +65,16 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenNewEventModal }) => 
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-[#1C1917] truncate">{evt.name}</span>
-                    <span className="text-[10px] text-[#78716C] font-mono-numbers">
+                    <span className="text-[10px] text-[#78716C] font-mono-numbers tabular-nums font-semibold">
                       {formatINR(evt.totalBudget, true)}
                     </span>
                   </div>
                   <div className="text-[11px] text-[#78716C] flex items-center gap-1.5">
-                    <span>{evt.type.replace('_', ' ')}</span>
+                    <span>{evt.type.replace(/_/g, ' ')}</span>
                     <span>·</span>
-                    <span>{evt.guestCount} guests</span>
+                    <span className="font-mono-numbers tabular-nums">{evt.guestCount} guests</span>
                     <span>·</span>
-                    <span>T-{evt.daysRemaining}d</span>
+                    <span className="font-mono-numbers tabular-nums">T-{evt.daysRemaining}d</span>
                   </div>
                 </button>
               ))}
@@ -85,7 +85,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenNewEventModal }) => 
                     setShowEventDropdown(false);
                     onOpenNewEventModal();
                   }}
-                  className="text-xs text-[#E05A47] hover:text-[#D04B38] font-medium py-1 px-1.5 flex items-center gap-1"
+                  className="text-xs text-[#E05A47] hover:text-[#D04B38] font-medium py-1 px-1.5 flex items-center gap-1 cursor-pointer"
                 >
                   <Plus className="w-3 h-3" />
                   <span>Create New Event</span>
@@ -97,7 +97,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenNewEventModal }) => 
                     setShowEventDropdown(false);
                   }}
                   title="Reset to 3 demo presets"
-                  className="text-[11px] text-[#78716C] hover:text-[#1C1917] flex items-center gap-1 py-1 px-1.5"
+                  className="text-[11px] text-[#78716C] hover:text-[#1C1917] flex items-center gap-1 py-1 px-1.5 cursor-pointer"
                 >
                   <RotateCcw className="w-3 h-3" />
                   <span>Reset Demo</span>
@@ -116,7 +116,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenNewEventModal }) => 
             <button
               key={subFunc}
               onClick={() => setActiveSubFunction(subFunc)}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
                 isActive
                   ? 'bg-white text-[#1C1917] shadow-xs font-semibold'
                   : 'text-[#78716C] hover:text-[#1C1917]'
@@ -128,12 +128,12 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenNewEventModal }) => 
         })}
       </div>
 
-      {/* Zone 3: Readiness Score & 1 Primary Action */}
+      {/* Zone 3: Deterministic Readiness Score & Primary Action */}
       <div className="flex items-center gap-4 shrink-0">
         <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 bg-white border border-[#E7E5E4] rounded-md">
           <div className="flex flex-col text-right">
             <span className="text-[10px] text-[#78716C] uppercase font-semibold">Readiness</span>
-            <span className="text-xs font-semibold text-[#1C1917] font-mono-numbers">
+            <span className="text-xs font-semibold text-[#1C1917] font-mono-numbers tabular-nums">
               {activeEvent.readinessScore}%
             </span>
           </div>
@@ -151,7 +151,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenNewEventModal }) => 
 
         <button
           onClick={onOpenNewEventModal}
-          className="px-3.5 py-1.5 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] active:bg-[#BA3E2C] rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-xs"
+          className="px-3.5 py-1.5 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] active:bg-[#BA3E2C] rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-xs cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
           <span>New Event</span>

@@ -1,16 +1,15 @@
 import React, { useState } from 'react';
 import { useEventContext } from '../../context/EventContext';
 import { TimelineTask, TaskStatus } from '../../types/event';
+import { getTaskStatusBadgeClass, sanitizeNumber } from '../../utils/eventMath';
 import {
-  Clock,
   AlertTriangle,
-  CheckCircle2,
   GitBranch,
-  Wrench,
   Plus,
-  ArrowRight,
-  ShieldAlert,
   Sparkles,
+  X,
+  Clock,
+  Bot,
 } from 'lucide-react';
 
 export const AdaptiveTimeline: React.FC = () => {
@@ -20,6 +19,9 @@ export const AdaptiveTimeline: React.FC = () => {
     updateTimelineTask,
     addTimelineTask,
     autoCompressSchedule,
+    sendCopilotCommand,
+    setActiveTab,
+    lastMutatedIds,
   } = useEventContext();
 
   const [showAddModal, setShowAddModal] = useState(false);
@@ -55,29 +57,33 @@ export const AdaptiveTimeline: React.FC = () => {
 
   const handleCreateTask = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle) return;
+    if (!newTitle.trim()) return;
+
+    const days = Math.max(0, sanitizeNumber(newDaysBefore, 20));
+    const duration = Math.max(1, sanitizeNumber(newDuration, 3));
 
     let phase: TimelineTask['phase'] = 'T-15_TO_7';
-    if (newDaysBefore >= 30) phase = 'T-60_TO_30';
-    else if (newDaysBefore >= 15) phase = 'T-30_TO_15';
-    else if (newDaysBefore >= 7) phase = 'T-15_TO_7';
-    else if (newDaysBefore > 0) phase = 'WEEK_OF_EVENT';
+    if (days >= 30) phase = 'T-60_TO_30';
+    else if (days >= 15) phase = 'T-30_TO_15';
+    else if (days >= 7) phase = 'T-15_TO_7';
+    else if (days > 0) phase = 'WEEK_OF_EVENT';
     else phase = 'RUN_OF_SHOW';
 
     addTimelineTask({
-      title: newTitle,
+      title: newTitle.trim(),
       subFunction: newSubFunction,
       phase,
-      daysBeforeEvent: newDaysBefore,
-      durationDays: newDuration,
+      daysBeforeEvent: days,
+      durationDays: duration,
       slippageDays: 0,
       status: 'ON_TRACK',
       dependsOnIds: newDependsOn,
-      owner: newOwner,
+      owner: newOwner.trim() || 'Coordinator',
       notes: 'Added from planner console',
     });
 
     setNewTitle('');
+    setNewDependsOn([]);
     setShowAddModal(false);
   };
 
@@ -95,14 +101,14 @@ export const AdaptiveTimeline: React.FC = () => {
               Adaptive Dependency Timeline
             </h2>
             {atRiskCount > 0 && (
-              <span className="text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+              <span className="text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1 font-mono-numbers tabular-nums">
                 <AlertTriangle className="w-3 h-3 text-amber-600" />
                 <span>{atRiskCount} tasks at risk</span>
               </span>
             )}
           </div>
           <p className="text-xs text-[#78716C]">
-            Backward scheduling DAG engine. Delays on foundational items dynamically cascade to downstream tasks.
+            Backward scheduling DAG engine with self-healing cascades and circular dependency prevention.
           </p>
         </div>
 
@@ -110,7 +116,7 @@ export const AdaptiveTimeline: React.FC = () => {
           {atRiskCount > 0 && (
             <button
               onClick={autoCompressSchedule}
-              className="px-3 py-1.5 text-xs font-semibold text-[#4F46E5] bg-[#EEF2FF] border border-[#C7D2FE] hover:bg-[#E0E7FF] rounded-md transition-colors flex items-center gap-1.5 shadow-2xs"
+              className="px-3 py-1.5 text-xs font-semibold text-[#4F46E5] bg-[#EEF2FF] border border-[#C7D2FE] hover:bg-[#E0E7FF] rounded-md transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
               title="Parallelize tasks to eliminate delay bottlenecks"
             >
               <Sparkles className="w-3.5 h-3.5 text-[#4F46E5]" />
@@ -120,7 +126,7 @@ export const AdaptiveTimeline: React.FC = () => {
 
           <button
             onClick={() => setShowAddModal(true)}
-            className="px-3 py-1.5 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] rounded-md transition-colors flex items-center gap-1.5 shrink-0 shadow-2xs"
+            className="px-3 py-1.5 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] rounded-md transition-colors flex items-center gap-1.5 shrink-0 shadow-2xs cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Add Task</span>
@@ -139,7 +145,7 @@ export const AdaptiveTimeline: React.FC = () => {
               <div className="text-[11px] font-semibold text-[#78716C] uppercase tracking-wider flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#E05A47]" />
                 <span>{phase.label}</span>
-                <span className="text-[10px] text-[#A8A29E] font-normal">
+                <span className="text-[10px] text-[#A8A29E] font-normal font-mono-numbers tabular-nums">
                   ({phaseTasks.length} tasks)
                 </span>
               </div>
@@ -147,14 +153,16 @@ export const AdaptiveTimeline: React.FC = () => {
               <div className="grid grid-cols-1 gap-2.5">
                 {phaseTasks.map((task) => {
                   const parentTasks = activeEvent.timelineTasks.filter((t) =>
-                    task.dependsOnIds.includes(t.id)
+                    (task.dependsOnIds || []).includes(t.id)
                   );
 
                   return (
                     <div
                       key={task.id}
                       className={`p-3.5 rounded-lg border transition-all ${
-                        task.status === 'DELAYED'
+                        lastMutatedIds.has(task.id)
+                          ? 'ring-2 ring-[#4F46E5] animate-pulse bg-indigo-50/70 border-indigo-300'
+                          : task.status === 'DELAYED'
                           ? 'bg-rose-50/40 border-rose-200'
                           : task.status === 'AT_RISK_DEPENDENCY'
                           ? 'bg-amber-50/40 border-amber-200'
@@ -176,17 +184,17 @@ export const AdaptiveTimeline: React.FC = () => {
                           </div>
 
                           <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#78716C]">
-                            <span className="font-mono-numbers font-medium text-[#1C1917]">
+                            <span className="font-mono-numbers tabular-nums font-medium text-[#1C1917]">
                               T-{task.daysBeforeEvent}d
                             </span>
                             <span>·</span>
                             <span>Owner: {task.owner}</span>
                             <span>·</span>
-                            <span>Duration: {task.durationDays}d</span>
+                            <span className="font-mono-numbers tabular-nums">Duration: {task.durationDays}d</span>
                             {task.slippageDays > 0 && (
                               <>
                                 <span>·</span>
-                                <span className="text-rose-700 font-medium font-mono-numbers">
+                                <span className="text-rose-700 font-medium font-mono-numbers tabular-nums">
                                   +{task.slippageDays}d slippage
                                 </span>
                               </>
@@ -201,21 +209,32 @@ export const AdaptiveTimeline: React.FC = () => {
                             onChange={(e) =>
                               handleStatusChange(task, e.target.value as TaskStatus)
                             }
-                            className={`text-xs font-medium px-2 py-1 rounded-md border outline-none bg-white cursor-pointer ${
-                              task.status === 'ON_TRACK'
-                                ? 'text-emerald-800 border-emerald-300 bg-emerald-50/50'
-                                : task.status === 'DELAYED'
-                                ? 'text-rose-800 border-rose-300 bg-rose-50'
-                                : task.status === 'AT_RISK_DEPENDENCY'
-                                ? 'text-amber-800 border-amber-300 bg-amber-50'
-                                : 'text-slate-700 border-slate-300 bg-slate-50'
-                            }`}
+                            className={`text-xs font-medium px-2 py-1 rounded-md border outline-none cursor-pointer ${getTaskStatusBadgeClass(
+                              task.status
+                            )}`}
                           >
                             <option value="ON_TRACK">ON TRACK</option>
                             <option value="DELAYED">DELAYED (+5d)</option>
-                            <option value="AT_RISK_DEPENDENCY">AT RISK</option>
+                            <option value="AT_RISK_DEPENDENCY">AT RISK (Upstream)</option>
                             <option value="COMPLETED">COMPLETED ✓</option>
                           </select>
+
+                          {/* Tab 2 → Copilot: Ask AI to Resolve Bottleneck */}
+                          {(task.status === 'DELAYED' || task.status === 'AT_RISK_DEPENDENCY') && (
+                            <button
+                              onClick={() => {
+                                const contextPrompt = `Task "${task.title}" in ${task.subFunction} is ${task.status}${task.slippageDays > 0 ? ` with ${task.slippageDays}d slippage` : ''}. Compress downstream lead times or reallocate budget for express vendor fulfillment to resolve this bottleneck and restore the timeline.`;
+                                sendCopilotCommand(contextPrompt);
+                                // Switch focus to copilot panel via a custom event
+                                window.dispatchEvent(new CustomEvent('eventflow:focus-copilot'));
+                              }}
+                              className="px-2 py-1 text-[11px] font-semibold text-[#4F46E5] bg-[#EEF2FF] border border-[#C7D2FE] hover:bg-[#E0E7FF] rounded-md transition-colors flex items-center gap-1 cursor-pointer shrink-0"
+                              title="Ask AI Copilot to resolve this bottleneck"
+                            >
+                              <Bot className="w-3 h-3" />
+                              <span>Ask AI</span>
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -232,6 +251,8 @@ export const AdaptiveTimeline: React.FC = () => {
                                   className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
                                     p.status === 'DELAYED'
                                       ? 'bg-rose-100 text-rose-800'
+                                      : p.status === 'AT_RISK_DEPENDENCY'
+                                      ? 'bg-amber-100 text-amber-800'
                                       : 'bg-[#F5F2EC] text-[#58413D]'
                                   }`}
                                 >
@@ -244,7 +265,7 @@ export const AdaptiveTimeline: React.FC = () => {
                           {task.status === 'AT_RISK_DEPENDENCY' && (
                             <div className="text-amber-800 font-medium flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
-                              <span>Upstream dependency delayed. Timeline window compressed.</span>
+                              <span>Upstream parent milestone delayed. Timeline window compressed.</span>
                             </div>
                           )}
                         </div>
@@ -274,9 +295,9 @@ export const AdaptiveTimeline: React.FC = () => {
               </h3>
               <button
                 onClick={() => setShowAddModal(false)}
-                className="text-[#78716C] hover:text-[#1C1917]"
+                className="text-[#78716C] hover:text-[#1C1917] cursor-pointer"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -327,9 +348,10 @@ export const AdaptiveTimeline: React.FC = () => {
                   </label>
                   <input
                     type="number"
+                    min="0"
                     value={newDaysBefore}
-                    onChange={(e) => setNewDaysBefore(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers"
+                    onChange={(e) => setNewDaysBefore(Math.max(0, sanitizeNumber(e.target.value, 0)))}
+                    className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers tabular-nums"
                   />
                 </div>
 
@@ -339,9 +361,10 @@ export const AdaptiveTimeline: React.FC = () => {
                   </label>
                   <input
                     type="number"
+                    min="1"
                     value={newDuration}
-                    onChange={(e) => setNewDuration(Number(e.target.value))}
-                    className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers"
+                    onChange={(e) => setNewDuration(Math.max(1, sanitizeNumber(e.target.value, 1)))}
+                    className="w-full px-3 py-1.5 border border-[#E7E5E4] rounded-md focus:border-[#E05A47] outline-none font-mono-numbers tabular-nums"
                   />
                 </div>
               </div>
@@ -368,7 +391,7 @@ export const AdaptiveTimeline: React.FC = () => {
                         }}
                         className="rounded accent-[#E05A47]"
                       />
-                      <span className="truncate">{t.title} (T-{t.daysBeforeEvent}d)</span>
+                      <span className="truncate font-mono-numbers tabular-nums">{t.title} (T-{t.daysBeforeEvent}d)</span>
                     </label>
                   ))}
                 </div>
@@ -378,13 +401,13 @@ export const AdaptiveTimeline: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="px-3 py-1.5 text-xs text-[#78716C] hover:text-[#1C1917]"
+                  className="px-3 py-1.5 text-xs text-[#78716C] hover:text-[#1C1917] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] rounded-md"
+                  className="px-4 py-1.5 text-xs font-semibold text-white bg-[#E05A47] hover:bg-[#D04B38] rounded-md cursor-pointer"
                 >
                   Create Task
                 </button>

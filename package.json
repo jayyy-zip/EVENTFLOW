@@ -9,6 +9,7 @@
     "start": "node server.js",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
+    "kill": "lsof -ti:3000 | xargs kill -9 2>/dev/null || true",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

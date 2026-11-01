@@ -3,6 +3,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { parseNaturalLanguageMutation } from './src/utils/eventMath';
 
 dotenv.config();
 
@@ -10,22 +11,50 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 
 app.use(express.json({ limit: '20mb' }));
 
 const apiKey = process.env.GEMINI_API_KEY;
 let aiClient: GoogleGenAI | null = null;
 
-if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
-  aiClient = new GoogleGenAI({
-    apiKey: apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
+if (apiKey && apiKey !== 'MY_GEMINI_API_KEY' && apiKey.trim().length > 10) {
+  try {
+    aiClient = new GoogleGenAI({
+      apiKey: apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
       },
-    },
-  });
+    });
+  } catch (err: any) {
+    console.warn('Failed to initialize GoogleGenAI client:', err?.message);
+  }
+}
+
+// Resilient JSON extractor & parser
+function extractJsonFromText(rawText: string): any {
+  if (!rawText) return null;
+  let cleaned = rawText.trim();
+  // Strip markdown code fences
+  cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+  // Find outermost curly braces
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+  }
+
+  return JSON.parse(cleaned);
+}
+
+// Robust number sanitizer
+function sanitizeNum(val: any, fallback = 0): number {
+  if (val === null || val === undefined || val === '') return fallback;
+  const n = Number(val);
+  return isNaN(n) || !isFinite(n) ? fallback : n;
 }
 
 const SYSTEM_INSTRUCTION = `You are EventFlow AI, an agentic, state-aware Event Planning Operating System designed for Weddings, Milestone Birthdays, and Community/Campus Events in India and global metros.
@@ -113,16 +142,18 @@ const planMutationSchema = {
 
 // POST /api/plan-mutation
 app.post('/api/plan-mutation', async (req: Request, res: Response) => {
-  const { prompt, currentPlan } = req.body;
+  const { prompt, currentPlan, eventId } = req.body;
 
   if (!prompt) {
     return res.status(400).json({ error: 'Prompt is required' });
   }
 
-  // Attempt live Gemini API call if key is available
+  const targetEventId = eventId || currentPlan?.id || 'event-default';
+
+  // Attempt live Gemini API call with timeout protection
   if (aiClient) {
     try {
-      const response = await aiClient.models.generateContent({
+      const apiPromise = aiClient.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: `User command: "${prompt}"\n\nCurrent Active Event State:\n${JSON.stringify(currentPlan, null, 2)}\n\nGenerate structured plan mutations. Calculate exact rupee adjustments.`,
         config: {
@@ -132,201 +163,89 @@ app.post('/api/plan-mutation', async (req: Request, res: Response) => {
         },
       });
 
-      const responseText = response.text;
+      // 8 second timeout safety race
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Gemini API timeout')), 8000)
+      );
+
+      const response: any = await Promise.race([apiPromise, timeoutPromise]);
+      const responseText = response?.text;
+
       if (responseText) {
-        const parsed = JSON.parse(responseText);
-        return res.json({
-          id: `mut-${Date.now()}`,
-          timestamp: Date.now(),
-          userPrompt: prompt,
-          assistantReply: parsed.assistant_reply || 'Plan updated with your requested adjustments.',
-          readinessScoreDelta: parsed.readiness_score_delta || 0,
-          budgetDiffs: (parsed.budget_mutations || []).map((b: any) => ({
-            category: b.category,
-            name: b.name,
-            subFunction: b.sub_function || 'All Functions',
-            costType: b.cost_type,
-            previousAmount: b.previous_amount || 0,
-            newAmount: b.allocated_amount,
-            aiWarning: b.ai_warning_badge || undefined,
-          })),
-          timelineDiffs: (parsed.timeline_tasks || []).map((t: any) => ({
-            title: t.title,
-            previousStatus: t.previous_status || 'ON_TRACK',
-            newStatus: t.new_status,
-            previousDaysBefore: t.previous_days_before || 0,
-            newDaysBefore: t.new_days_before || 0,
-            reason: t.reason,
-          })),
-          checklistAdditions: (parsed.executable_checklist_additions || []).map((c: any) => ({
-            itemName: c.item_name,
-            subFunction: c.sub_function || 'All Functions',
-            quantityOrSpec: c.quantity_or_spec,
-            estimatedCost: c.estimated_cost,
-          })),
-          applied: false,
-        });
+        const parsed = extractJsonFromText(responseText);
+        if (parsed) {
+          return res.json({
+            id: `mut-${Date.now()}`,
+            eventId: targetEventId,
+            timestamp: Date.now(),
+            userPrompt: prompt,
+            assistantReply: parsed.assistant_reply || 'Plan updated with your requested adjustments.',
+            readinessScoreDelta: sanitizeNum(parsed.readiness_score_delta, 0),
+            budgetDiffs: (parsed.budget_mutations || []).map((b: any) => ({
+              category: b.category || 'General',
+              name: b.name || 'Custom Item',
+              subFunction: b.sub_function || 'All Functions',
+              costType: b.cost_type || 'FIXED',
+              previousAmount: sanitizeNum(b.previous_amount, 0),
+              newAmount: sanitizeNum(b.allocated_amount, 0),
+              aiWarning: b.ai_warning_badge || undefined,
+            })),
+            timelineDiffs: (parsed.timeline_tasks || []).map((t: any) => ({
+              title: t.title || 'Timeline Milestone',
+              previousStatus: t.previous_status || 'ON_TRACK',
+              newStatus: t.new_status || 'ON_TRACK',
+              previousDaysBefore: sanitizeNum(t.previous_days_before, 0),
+              newDaysBefore: sanitizeNum(t.new_days_before, 0),
+              reason: t.reason || '',
+            })),
+            checklistAdditions: (parsed.executable_checklist_additions || []).map((c: any) => ({
+              itemName: c.item_name || 'Checklist Item',
+              subFunction: c.sub_function || 'All Functions',
+              quantityOrSpec: c.quantity_or_spec || '',
+              estimatedCost: sanitizeNum(c.estimated_cost, 0),
+            })),
+            applied: false,
+          });
+        }
       }
     } catch (err: any) {
-      console.error('Gemini API call failed, falling back to deterministic engine:', err?.message);
+      console.warn('Gemini API call failed, falling back to deterministic engine:', err?.message);
     }
   }
 
-  // Fallback engine: handles prompt scenarios deterministically
-  const lowerPrompt = prompt.toLowerCase();
-  
-  if (lowerPrompt.includes('floral') || lowerPrompt.includes('decor') || lowerPrompt.includes('dj')) {
-    // Test Scenario 1 / Decor-to-DJ reallocation
-    return res.json({
-      id: `mut-${Date.now()}`,
-      timestamp: Date.now(),
-      userPrompt: prompt,
-      assistantReply:
-        'Reduced Decor & Floral allocation by 20% (-₹48,000) and reallocated ₹48,000 to Sound & DJ for higher-spec line arrays and late-night permission. Sangeet timeline adjusted to accommodate an extended 4-hour performance block.',
-      readinessScoreDelta: 4,
-      budgetDiffs: [
-        {
-          category: 'Decor & Florals',
-          name: 'Traditional Marigold Mandap & Fairy Light Canopy',
-          subFunction: 'Sangeet',
-          costType: 'FIXED',
-          previousAmount: 240000,
-          newAmount: 192000,
-          aiWarning: undefined,
-        },
-        {
-          category: 'Sound, DJ & Licensing',
-          name: 'DJ Shaan Sound System + PPL/Novex License',
-          subFunction: 'Sangeet',
-          costType: 'HYBRID',
-          previousAmount: 90000,
-          newAmount: 138000,
-          aiWarning: undefined,
-        },
-      ],
-      timelineDiffs: [
-        {
-          title: 'Sangeet Choreography & Track Audio Mastering',
-          previousStatus: 'ON_TRACK',
-          newStatus: 'ON_TRACK',
-          previousDaysBefore: 14,
-          newDaysBefore: 14,
-          reason: 'Extended performance rundown: Sound check shifted earlier by 1 hour (5:00 PM start).',
-        },
-      ],
-      checklistAdditions: [
-        {
-          itemName: 'Dual Wireless UHF Lapel & Handheld Microphones',
-          subFunction: 'Sangeet',
-          quantityOrSpec: '4 Sennheiser G4 sets for family MCs',
-          estimatedCost: 6500,
-        },
-      ],
-      applied: false,
-    });
-  } else if (lowerPrompt.includes('guest') || lowerPrompt.includes('320') || lowerPrompt.includes('trim')) {
-    // Test Scenario 2 / Guest jump to 320 & budget lock
-    return res.json({
-      id: `mut-${Date.now()}`,
-      timestamp: Date.now(),
-      userPrompt: prompt,
-      assistantReply:
-        'Guest count increase (+70 guests) elevates catering by ₹80,500. Kept total budget locked strictly at ₹12,00,000 by trimming non-essential floral photobooths (-₹50,000) and candid drone coverage (-₹30,500). Warning: Venue capacity of Baner Lawns (300) is exceeded by 20 guests.',
-      readinessScoreDelta: -2,
-      budgetDiffs: [
-        {
-          category: 'Catering & Beverages',
-          name: 'Saffron Feast Co. (3-Meal Package + Mocktail Bar)',
-          subFunction: 'Reception',
-          costType: 'VARIABLE_PER_GUEST',
-          previousAmount: 287500,
-          newAmount: 368000,
-          aiWarning: 'Recalculated for 320 guests at ₹1,150/plate benchmark.',
-        },
-        {
-          category: 'Decor & Florals',
-          name: 'Traditional Marigold Mandap & Fairy Light Canopy',
-          subFunction: 'Sangeet',
-          costType: 'FIXED',
-          previousAmount: 240000,
-          newAmount: 190000,
-          aiWarning: undefined,
-        },
-        {
-          category: 'Photography & Film',
-          name: 'Moments Cinematic Pune (2-Day Candid + Drone + Teaser)',
-          subFunction: 'Wedding Ceremony',
-          costType: 'FIXED',
-          previousAmount: 150000,
-          newAmount: 119500,
-          aiWarning: undefined,
-        },
-      ],
-      timelineDiffs: [
-        {
-          title: 'Lock Baner Lawns & Banquet Contract',
-          previousStatus: 'ON_TRACK',
-          newStatus: 'AT_RISK_DEPENDENCY',
-          previousDaysBefore: 45,
-          newDaysBefore: 45,
-          reason: 'CRITICAL: Guest count (320) exceeds hall licensed capacity of 300. Lawn extension negotiation required.',
-        },
-      ],
-      checklistAdditions: [
-        {
-          itemName: 'Additional Banquet Seating & Round Tables (30 chairs)',
-          subFunction: 'Reception',
-          quantityOrSpec: '3 round tables with ivory silk linen overlay',
-          estimatedCost: 7500,
-        },
-      ],
-      applied: false,
-    });
-  } else {
-    // Generic intelligent mutation based on user input
-    return res.json({
-      id: `mut-${Date.now()}`,
-      timestamp: Date.now(),
-      userPrompt: prompt,
-      assistantReply: `Audited your event plan in accordance with Indian metro benchmark standards for "${prompt}". Adjusted buffer reserve and timeline tasks to maintain execution safety.`,
-      readinessScoreDelta: 3,
-      budgetDiffs: [
-        {
-          category: 'Tax & Contingency Reserve',
-          name: '8% GST Buffer & Emergency Contingency Fund',
-          subFunction: 'All Functions',
-          costType: 'TAX_AND_BUFFER',
-          previousAmount: 89000,
-          newAmount: 96000,
-          aiWarning: undefined,
-        },
-      ],
-      timelineDiffs: [
-        {
-          title: 'Wedding Day Run-of-Show & VIP Logistics Coordination',
-          previousStatus: 'ON_TRACK',
-          newStatus: 'ON_TRACK',
-          previousDaysBefore: 0,
-          newDaysBefore: 0,
-          reason: 'Synchronized operational schedule with updated vendor SLAs.',
-        },
-      ],
-      checklistAdditions: [
-        {
-          itemName: 'Emergency Power & Battery Inverter Backup',
-          subFunction: 'General',
-          quantityOrSpec: '2 x 5kVA silent inverter units for audio console',
-          estimatedCost: 8000,
-        },
-      ],
-      applied: false,
-    });
-  }
+  // Fallback engine: dynamically parses custom user instructions using domain engine
+  const parsed = parseNaturalLanguageMutation(prompt, currentPlan || {
+    id: targetEventId,
+    name: 'Active Event',
+    guestCount: 250,
+    totalBudget: 1200000,
+    budgetItems: [],
+    timelineTasks: [],
+    themeChecklist: [],
+  });
+
+  return res.json({
+    id: `mut-${Date.now()}`,
+    eventId: targetEventId,
+    timestamp: Date.now(),
+    userPrompt: prompt,
+    assistantReply: parsed.assistantReply || `Audited your event plan in accordance with Indian metro benchmark standards for "${prompt}".`,
+    readinessScoreDelta: 3,
+    budgetDiffs: (parsed.budgetDiffs || []).map((b) => ({
+      ...b,
+      previousAmount: sanitizeNum(b.previousAmount, 0),
+      newAmount: sanitizeNum(b.newAmount, 0),
+    })),
+    timelineDiffs: parsed.timelineDiffs || [],
+    checklistAdditions: parsed.checklistAdditions || [],
+    applied: false,
+  });
 });
 
-// POST /api/vendor-extract
-app.post('/api/vendor-extract', async (req: Request, res: Response) => {
+// Common handler for vendor extraction & compare
+async function handleVendorExtract(req: Request, res: Response) {
   const { rawText, imageBase64, mimeType, guestCount = 250 } = req.body;
+  const safeGuests = Math.max(20, sanitizeNum(guestCount, 250));
 
   if (aiClient && (rawText || imageBase64)) {
     try {
@@ -340,7 +259,7 @@ app.post('/api/vendor-extract', async (req: Request, res: Response) => {
         });
       }
       parts.push({
-        text: `Analyze this vendor quote for an event in Pune/India with ${guestCount} guests:\n\n${rawText || 'See attached vendor quote image.'}\n\nNormalize pricing, extract base cost, per-plate cost, GST slab (5% vs 18%), and find ALL HIDDEN EXCLUSIONS (generator diesel, overtime past 11 PM, outside decorator royalty, PPL music license, waiter tips, cleaning deposit). Write a polite yet firm WhatsApp counter-offer in Indian business tone.`,
+        text: `Analyze this vendor quote for an event in Pune/India with ${safeGuests} guests:\n\n${rawText || 'See attached vendor quote image.'}\n\nNormalize pricing, extract base cost, per-plate cost, GST slab (5% vs 18%), and find ALL HIDDEN EXCLUSIONS (generator diesel, overtime past 11 PM, outside decorator royalty, PPL music license, waiter tips, cleaning deposit). Write a polite yet firm WhatsApp counter-offer in Indian business tone.`,
       });
 
       const response = await aiClient.models.generateContent({
@@ -384,30 +303,40 @@ app.post('/api/vendor-extract', async (req: Request, res: Response) => {
 
       const text = response.text;
       if (text) {
-        const p = JSON.parse(text);
-        return res.json({
-          id: `vq-${Date.now()}`,
-          vendorName: p.vendor_name || 'Extracted Vendor Quote',
-          category: p.category || 'Catering',
-          baseCost: p.base_cost || 237500,
-          perPlateCost: p.per_plate_cost || 950,
-          gstRatePercent: p.gst_rate_percent || 18,
-          taxesGstAmount: p.taxes_gst_amount || Math.round((p.base_cost || 237500) * 0.18),
-          estimatedHiddenCosts: p.estimated_hidden_costs || 24000,
-          normalizedTotal: p.normalized_total || 295000,
-          hiddenFeesFlagged: p.hidden_fees_flagged || ['No generator fuel backup included', 'Late-night overtime fees'],
-          aiRecommendationBadge: p.ai_recommendation_badge || 'HIGH_RISK_EXCLUSIONS',
-          negotiationScript: p.negotiation_script || 'Namaste team, requesting waiver on unbundled fuel charges.',
-        });
+        const p = extractJsonFromText(text);
+        if (p) {
+          const baseCost = sanitizeNum(p.base_cost, 237500);
+          const gstRate = p.gst_rate_percent === 5 ? 5 : 18;
+          const gstAmount = sanitizeNum(p.taxes_gst_amount, Math.round(baseCost * (gstRate / 100)));
+          const hiddenCosts = sanitizeNum(p.estimated_hidden_costs, 24000);
+          const normalized = sanitizeNum(p.normalized_total, baseCost + gstAmount + hiddenCosts);
+
+          return res.json({
+            id: `vq-${Date.now()}`,
+            vendorName: p.vendor_name || 'Extracted Vendor Quote',
+            category: p.category || 'Catering',
+            baseCost,
+            perPlateCost: sanitizeNum(p.per_plate_cost, Math.round(baseCost / safeGuests)),
+            gstRatePercent: gstRate,
+            taxesGstAmount: gstAmount,
+            estimatedHiddenCosts: hiddenCosts,
+            normalizedTotal: normalized,
+            hiddenFeesFlagged: Array.isArray(p.hidden_fees_flagged) && p.hidden_fees_flagged.length > 0
+              ? p.hidden_fees_flagged
+              : ['No generator fuel backup included', 'Late-night overtime fees'],
+            aiRecommendationBadge: p.ai_recommendation_badge || 'HIGH_RISK_EXCLUSIONS',
+            negotiationScript: p.negotiation_script || 'Namaste team, requesting waiver on unbundled fuel charges.',
+          });
+        }
       }
     } catch (e: any) {
-      console.error('Gemini Vision/Text vendor extraction error:', e?.message);
+      console.warn('Gemini Vision/Text vendor extraction fallback:', e?.message);
     }
   }
 
   // Fallback demo extraction
   const perPlate = 950;
-  const base = perPlate * guestCount;
+  const base = perPlate * safeGuests;
   const gst = Math.round(base * 0.18);
   const hidden = 26000;
   const total = base + gst + hidden;
@@ -428,19 +357,24 @@ app.post('/api/vendor-extract', async (req: Request, res: Response) => {
       'Post-event kitchen waste disposal fee (₹9,000)',
     ],
     aiRecommendationBadge: 'HIGH_RISK_EXCLUSIONS',
-    negotiationScript: `Namaste Baner Garden team, we reviewed your quote of ₹${perPlate}/plate for our ${guestCount} guests. We noticed essential operational costs like generator backup and waste disposal are excluded, which pushes the true effective per-plate rate to ₹${Math.round(total / guestCount)} with 18% GST. Given our confirmed booking date, we request an all-inclusive packaged rate of ₹1,050/plate with GST and fuel bundled. Let us know if we can finalize the contract today.`,
+    negotiationScript: `Namaste Baner Garden team, we reviewed your quote of ₹${perPlate}/plate for our ${safeGuests} guests. We noticed essential operational costs like generator backup and waste disposal are excluded, which pushes the true effective per-plate rate to ₹${Math.round(total / safeGuests)} with 18% GST. Given our confirmed booking date, we request an all-inclusive packaged rate of ₹1,050/plate with GST and fuel bundled. Let us know if we can finalize the contract today.`,
   });
-});
+}
 
-// POST /api/moodboard-bom
-app.post('/api/moodboard-bom', async (req: Request, res: Response) => {
+// POST /api/vendor-extract and /api/vendor-compare alias
+app.post('/api/vendor-extract', handleVendorExtract);
+app.post('/api/vendor-compare', handleVendorExtract);
+
+// Common handler for moodboard BOM & theme extract
+async function handleMoodboardBOM(req: Request, res: Response) {
   const { vibePrompt, budgetCap = 150000, subFunction = 'Haldi' } = req.body;
+  const safeCap = sanitizeNum(budgetCap, 150000);
 
   if (aiClient && vibePrompt) {
     try {
       const response = await aiClient.models.generateContent({
         model: 'gemini-3.8-flash',
-        contents: `Theme / Vibe: "${vibePrompt}". Budget cap: ₹${budgetCap}. Sub-function: ${subFunction}.\nGenerate aesthetic concept & concrete Bill of Materials (BOM) with quantities and estimated local INR prices for India.`,
+        contents: `Theme / Vibe: "${vibePrompt}". Budget cap: ₹${safeCap}. Sub-function: ${subFunction}.\nGenerate aesthetic concept & concrete Bill of Materials (BOM) with quantities and estimated local INR prices for India.`,
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
           responseMimeType: 'application/json',
@@ -469,22 +403,24 @@ app.post('/api/moodboard-bom', async (req: Request, res: Response) => {
 
       const text = response.text;
       if (text) {
-        const p = JSON.parse(text);
-        return res.json({
-          aestheticSummary: p.aesthetic_summary,
-          colorPalette: p.color_palette,
-          checklist: (p.bill_of_materials || []).map((b: any, idx: number) => ({
-            id: `ci-gen-${Date.now()}-${idx}`,
-            itemName: b.item_name,
-            subFunction,
-            quantityOrSpec: b.quantity_or_spec,
-            estimatedCost: b.estimated_cost,
-            syncedToBudget: false,
-          })),
-        });
+        const p = extractJsonFromText(text);
+        if (p) {
+          return res.json({
+            aestheticSummary: p.aesthetic_summary || 'Warm sunlit Indian courtyard setting with handcrafted accents.',
+            colorPalette: Array.isArray(p.color_palette) ? p.color_palette : ['#E05A47', '#F59E0B'],
+            checklist: (p.bill_of_materials || []).map((b: any, idx: number) => ({
+              id: `ci-gen-${Date.now()}-${idx}`,
+              itemName: b.item_name || 'Decorative Accent',
+              subFunction,
+              quantityOrSpec: b.quantity_or_spec || 'Standard setup',
+              estimatedCost: sanitizeNum(b.estimated_cost, 10000),
+              syncedToBudget: false,
+            })),
+          });
+        }
       }
     } catch (e: any) {
-      console.error('Moodboard generation error:', e?.message);
+      console.warn('Moodboard generation fallback:', e?.message);
     }
   }
 
@@ -495,7 +431,7 @@ app.post('/api/moodboard-bom', async (req: Request, res: Response) => {
     colorPalette: ['#E05A47 (Terracotta)', '#F59E0B (Marigold)', '#FEF08A (Haldi Yellow)', '#451A03 (Dark Wood)'],
     checklist: [
       {
-        id: `ci-gen-1`,
+        id: `ci-gen-${Date.now()}-1`,
         itemName: 'Fresh Genda (Marigold) Garland Torans (120 strings)',
         subFunction,
         quantityOrSpec: '120 strings x 8ft fresh farm-harvested flowers',
@@ -503,7 +439,7 @@ app.post('/api/moodboard-bom', async (req: Request, res: Response) => {
         syncedToBudget: false,
       },
       {
-        id: `ci-gen-2`,
+        id: `ci-gen-${Date.now()}-2`,
         itemName: 'Carved Wooden Jhula (Swing) with Floral Canopy',
         subFunction,
         quantityOrSpec: '1 solid teak antique swing with floral side ropes',
@@ -511,7 +447,7 @@ app.post('/api/moodboard-bom', async (req: Request, res: Response) => {
         syncedToBudget: false,
       },
       {
-        id: `ci-gen-3`,
+        id: `ci-gen-${Date.now()}-3`,
         itemName: 'Hand-beaten Brass Urli Bowls for Floating Petals',
         subFunction,
         quantityOrSpec: '6 x 20-inch brass urli bowls + floating candles',
@@ -519,7 +455,7 @@ app.post('/api/moodboard-bom', async (req: Request, res: Response) => {
         syncedToBudget: false,
       },
       {
-        id: `ci-gen-4`,
+        id: `ci-gen-${Date.now()}-4`,
         itemName: 'Jaipuri Block-Print Floor Dastarkhwan & Mattresses',
         subFunction,
         quantityOrSpec: '8 low gaddas with yellow and rust bolster cushions',
@@ -528,7 +464,11 @@ app.post('/api/moodboard-bom', async (req: Request, res: Response) => {
       },
     ],
   });
-});
+}
+
+// POST /api/moodboard-bom and /api/theme-extract alias
+app.post('/api/moodboard-bom', handleMoodboardBOM);
+app.post('/api/theme-extract', handleMoodboardBOM);
 
 // Vite middleware in dev or static files in production
 async function startServer() {
@@ -546,9 +486,34 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`EventFlow AI server listening on http://0.0.0.0:${PORT}`);
-  });
+  function tryListen(portToTry: number) {
+    const server = app.listen(portToTry, '0.0.0.0', () => {
+      console.log('\n┌────────────────────────────────────────────────────────┐');
+      console.log('│  EventFlow AI is running and ready!                    │');
+      console.log(`│  ➜  Local:   http://localhost:${portToTry}                     │`);
+      console.log(`│  ➜  Network: http://0.0.0.0:${portToTry}                       │`);
+      console.log('└────────────────────────────────────────────────────────┘\n');
+    });
+
+    server.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`⚠️  Port ${portToTry} is already in use by another process.`);
+        if (portToTry < PORT + 5) {
+          console.log(`➜  Automatically trying port ${portToTry + 1}...`);
+          tryListen(portToTry + 1);
+        } else {
+          console.error(`❌ Ports ${PORT} through ${portToTry} are all in use.`);
+          console.error(`➜  To free port 3000, run: npm run kill`);
+          process.exit(1);
+        }
+      } else {
+        console.error('Server error:', err);
+        process.exit(1);
+      }
+    });
+  }
+
+  tryListen(PORT);
 }
 
 startServer();

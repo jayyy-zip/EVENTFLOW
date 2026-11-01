@@ -12,18 +12,18 @@ export default function App() {
   return (
     <EventProvider>
       <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#FAF8F5] text-[#1C1917]">
-        {/* Top Header */}
+        {/* Top Header - Fixed at top */}
         <TopHeader onOpenNewEventModal={() => setIsNewEventModalOpen(true)} />
 
-        {/* 3-Pane Split Workspace */}
+        {/* 3-Pane Viewport Locked Workspace */}
         <div className="flex flex-1 min-h-0 overflow-hidden">
           {/* Left Rail: Navigation, Event Switcher, Buffer Control */}
           <LeftSidebar />
 
-          {/* Center Canvas: Live Telemetry & 4 Core Modules */}
+          {/* Center Canvas: Pinned Telemetry Bar & Independently Scrollable Modules */}
           <CenterCanvas />
 
-          {/* Right Dock: Stateful AI Copilot */}
+          {/* Right Dock: Stateful AI Copilot with Pinned Input */}
           <RightCopilotPanel />
         </div>
 
